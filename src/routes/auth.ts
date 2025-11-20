@@ -11,6 +11,7 @@ const androidClientId = process.env.GOOGLE_ANDROID_CLIENT_ID || "";
 const iosClientId = process.env.GOOGLE_IOS_CLIENT_ID || "";
 const oauthClient = new OAuth2Client(clientId);
 
+// --- GOOGLE LOGIN ---
 router.post("/google", async (req, res) => {
   const { idToken } = req.body as { idToken?: string };
   if (!idToken) return res.status(400).json({ error: "Missing idToken" });
@@ -55,111 +56,93 @@ router.post("/google", async (req, res) => {
   }
 });
 
-const smtpHost = process.env.SMTP_HOST || "";
-const smtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 465;
+// --- SMTP AYARLARI (RENDER İLE UYUMLU) ---
+// Ortam değişkenlerini zorluyoruz, yoksa varsayılanları kullanıyoruz
+const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+const smtpPort = parseInt(process.env.SMTP_PORT || "465"); // String'i sayıya çeviriyoruz
 const smtpUser = process.env.SMTP_USER || "";
-const smtpPass = process.env.SMTP_PASS || "";
+const smtpPass = (process.env.SMTP_PASS || "").replace(/\s/g, ""); // Boşlukları temizle
+const isSecure = process.env.SECURE === "true" || smtpPort === 465; // 465 ise secure true olmalı
+
+console.log("📧 [SERVER] Mail Ayarları Başlatılıyor...");
+console.log(`   Host: ${smtpHost}`);
+console.log(`   Port: ${smtpPort}`);
+console.log(`   Secure: ${isSecure}`);
+console.log(`   User: ${smtpUser ? "✅ Var" : "❌ Yok"}`);
+console.log(
+  `   Pass: ${
+    smtpPass ? "✅ Var (Uzunluk: " + smtpPass.length + ")" : "❌ Yok"
+  }`
+);
+
 const transporter = nodemailer.createTransport({
-  host: smtpHost || "smtp.gmail.com",
+  host: smtpHost,
   port: smtpPort,
-  secure: true, // SSL kullanmaya zorla (port 465 için gerekli)
-  auth: { user: smtpUser, pass: smtpPass },
+  secure: isSecure, // SSL (465 için true, 587 için false)
+  auth: {
+    user: smtpUser,
+    pass: smtpPass,
+  },
+  tls: {
+    // Render'da bazen sertifika zinciri hatası olur, bunu yok sayıyoruz
+    rejectUnauthorized: false,
+  },
 });
 
-// Sunucu başlarken SMTP bağlantısını kontrol et
-console.log("📧 [SERVER] SMTP yapılandırması kontrol ediliyor...");
+// Sunucu başlarken bağlantıyı test et
 transporter
   .verify()
-  .then(() => {
-    console.log("✅ [SERVER] SMTP bağlantısı başarılı - Sunucu hazır");
-  })
+  .then(() =>
+    console.log("✅ [SERVER] SMTP Bağlantısı BAŞARILI! Mail atabilirim.")
+  )
   .catch((err) => {
-    console.error("❌ [SERVER] SMTP bağlantı hatası:", err);
-    console.error(
-      "⚠️ [SERVER] Sunucu başladı ama SMTP yapılandırması hatalı olabilir"
-    );
+    console.error("🔥 [SERVER] SMTP Bağlantı Hatası:", err);
+    // Hata olsa bile sunucuyu çökertmiyoruz, sadece logluyoruz
   });
 
 const requestSchema = z.object({ email: z.string().email() });
-router.post("/request-code", async (req, res) => {
-  const startTime = Date.now();
-  console.log("📥 [SERVER] /request-code endpoint'ine istek geldi");
-  console.log("📥 [SERVER] Request body:", JSON.stringify(req.body, null, 2));
-  console.log("📥 [SERVER] Request headers:", {
-    "content-type": req.headers["content-type"],
-    "user-agent": req.headers["user-agent"],
-  });
 
+// --- REQUEST CODE ---
+router.post("/request-code", async (req, res) => {
+  console.log("📥 [SERVER] /request-code isteği geldi");
   const parsed = requestSchema.safeParse(req.body);
+
   if (!parsed.success) {
-    console.error("❌ [SERVER] Schema validation başarısız:", parsed.error);
     return res.status(400).json({ error: "Invalid email" });
   }
-  console.log("✅ [SERVER] Schema validation başarılı");
 
   try {
     const email = parsed.data.email.toLowerCase();
-    console.log("📧 [SERVER] Email:", email);
-
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    console.log("🔐 [SERVER] Oluşturulan kod:", code);
-
     const expires = new Date(Date.now() + 10 * 60 * 1000);
-    console.log("⏰ [SERVER] Kod geçerlilik süresi:", expires.toISOString());
 
-    console.log("🔍 [SERVER] Kullanıcı aranıyor...");
+    // Kullanıcıyı bul veya oluştur
     let user = await User.findOne({ email });
     if (!user) {
-      console.log(
-        "👤 [SERVER] Kullanıcı bulunamadı, yeni kullanıcı oluşturuluyor..."
-      );
       user = await User.create({ email, googleId: `email_${Date.now()}` });
-      console.log("✅ [SERVER] Yeni kullanıcı oluşturuldu:", user._id);
-    } else {
-      console.log("👤 [SERVER] Mevcut kullanıcı bulundu:", user._id);
     }
 
     user.loginCode = code;
     user.loginCodeExpires = expires;
-    console.log("💾 [SERVER] Kullanıcı bilgileri güncelleniyor...");
     await user.save();
-    console.log("✅ [SERVER] Kullanıcı bilgileri kaydedildi");
 
-    try {
-      console.log("📧 [SERVER] SMTP bağlantısı kontrol ediliyor...");
-      await transporter.verify();
-      console.log("✅ [SERVER] SMTP bağlantısı başarılı");
+    console.log(`📤 [SERVER] ${email} adresine mail gönderiliyor...`);
 
-      console.log("📧 [SERVER] E-posta gönderiliyor...");
-      console.log("📧 [SERVER] E-posta detayları:", {
-        from: smtpUser,
-        to: email,
-        subject: "Giris Kodu",
-      });
-      await transporter.sendMail({
-        from: smtpUser,
-        to: email,
-        subject: "Giris Kodu",
-        text: `Giris kodunuz: ${code}`,
-      });
-      console.log("✅ [SERVER] E-posta başarıyla gönderildi");
+    // Mail Gönderme
+    const info = await transporter.sendMail({
+      from: `"Pratik Şef" <${smtpUser}>`,
+      to: email,
+      subject: "Giriş Kodunuz - Pratik Şef",
+      text: `Kodunuz: ${code}`,
+      html: `<b>Kodunuz: ${code}</b>`,
+    });
 
-      const elapsed = Date.now() - startTime;
-      console.log(`✅ [SERVER] İstek başarıyla tamamlandı (${elapsed}ms)`);
-      res.json({ ok: true });
-    } catch (e: any) {
-      const elapsed = Date.now() - startTime;
-      console.error(`❌ [SERVER] E-posta gönderme hatası (${elapsed}ms):`, e);
-      console.error("❌ [SERVER] Hata mesajı:", e?.message);
-      console.error("❌ [SERVER] Hata stack:", e?.stack);
-      res.status(500).json({ error: e?.message || "Send failed" });
-    }
+    console.log("✅ [SERVER] Mail gönderildi! ID:", info.messageId);
+    res.json({ ok: true });
   } catch (e: any) {
-    const elapsed = Date.now() - startTime;
-    console.error(`❌ [SERVER] Genel hata (${elapsed}ms):`, e);
-    console.error("❌ [SERVER] Hata mesajı:", e?.message);
-    console.error("❌ [SERVER] Hata stack:", e?.stack);
-    res.status(500).json({ error: e?.message || "Send failed" });
+    console.error("❌ [SERVER] Mail Gönderme Hatası:", e);
+    // Hatayı detaylı olarak logluyoruz ki Render'da görelim
+    res.status(500).json({ error: e?.message || "Mail gönderilemedi" });
   }
 });
 
@@ -167,69 +150,40 @@ const verifySchema = z.object({
   email: z.string().email(),
   code: z.string().min(4).max(8),
 });
-router.post("/verify-code", async (req, res) => {
-  const startTime = Date.now();
-  console.log("📥 [SERVER] /verify-code endpoint'ine istek geldi");
-  console.log("📥 [SERVER] Request body:", JSON.stringify(req.body, null, 2));
 
+// --- VERIFY CODE ---
+router.post("/verify-code", async (req, res) => {
   const parsed = verifySchema.safeParse(req.body);
-  if (!parsed.success) {
-    console.error("❌ [SERVER] Schema validation başarısız:", parsed.error);
-    return res.status(400).json({ error: "Invalid input" });
-  }
-  console.log("✅ [SERVER] Schema validation başarılı");
+  if (!parsed.success) return res.status(400).json({ error: "Invalid input" });
 
   try {
     const email = parsed.data.email.toLowerCase();
     const code = parsed.data.code;
-    console.log("📧 [SERVER] Email:", email);
-    console.log("🔐 [SERVER] Girilen kod:", code);
 
-    console.log("🔍 [SERVER] Kullanıcı aranıyor...");
     const user = await User.findOne({ email });
     if (!user || !user.loginCode || !user.loginCodeExpires) {
-      console.error("❌ [SERVER] Kullanıcı bulunamadı veya kod yok");
-      return res.status(401).json({ error: "Invalid code" });
+      return res.status(401).json({ error: "Kod geçersiz" });
     }
-    console.log("👤 [SERVER] Kullanıcı bulundu:", user._id);
-    console.log("🔐 [SERVER] Kayıtlı kod:", user.loginCode);
-    console.log(
-      "⏰ [SERVER] Kod geçerlilik süresi:",
-      user.loginCodeExpires.toISOString()
-    );
-    console.log("⏰ [SERVER] Şu anki zaman:", new Date().toISOString());
 
     if (
       user.loginCode !== code ||
       user.loginCodeExpires.getTime() < Date.now()
     ) {
-      console.error("❌ [SERVER] Kod doğrulama başarısız");
-      console.error("❌ [SERVER] Kod eşleşmesi:", user.loginCode === code);
-      console.error(
-        "❌ [SERVER] Kod geçerliliği:",
-        user.loginCodeExpires.getTime() >= Date.now()
-      );
-      return res.status(401).json({ error: "Invalid code" });
+      return res.status(401).json({ error: "Hatalı veya süresi dolmuş kod" });
     }
-    console.log("✅ [SERVER] Kod doğrulandı");
 
+    // Temizlik
     user.loginCode = undefined as any;
     user.loginCodeExpires = undefined as any;
-    console.log("💾 [SERVER] Kullanıcı kod bilgileri temizleniyor...");
     await user.save();
-    console.log("✅ [SERVER] Kullanıcı bilgileri güncellendi");
 
-    console.log("🔑 [SERVER] Token oluşturuluyor...");
     const token = signSession({
       id: String(user._id),
       email: user.email,
       name: user.name || undefined,
       avatar: user.avatar || undefined,
     });
-    console.log("✅ [SERVER] Token oluşturuldu");
 
-    const elapsed = Date.now() - startTime;
-    console.log(`✅ [SERVER] İstek başarıyla tamamlandı (${elapsed}ms)`);
     res.json({
       token,
       user: {
@@ -239,11 +193,7 @@ router.post("/verify-code", async (req, res) => {
         avatar: user.avatar,
       },
     });
-  } catch (e: any) {
-    const elapsed = Date.now() - startTime;
-    console.error(`❌ [SERVER] Genel hata (${elapsed}ms):`, e);
-    console.error("❌ [SERVER] Hata mesajı:", e?.message);
-    console.error("❌ [SERVER] Hata stack:", e?.stack);
+  } catch (e) {
     res.status(500).json({ error: "Verify failed" });
   }
 });
