@@ -56,15 +56,29 @@ router.post("/google", async (req, res) => {
 });
 
 const smtpHost = process.env.SMTP_HOST || "";
-const smtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 587;
+const smtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 465;
 const smtpUser = process.env.SMTP_USER || "";
 const smtpPass = process.env.SMTP_PASS || "";
 const transporter = nodemailer.createTransport({
   host: smtpHost || "smtp.gmail.com",
   port: smtpPort,
-  secure: false,
+  secure: true, // SSL kullanmaya zorla (port 465 için gerekli)
   auth: { user: smtpUser, pass: smtpPass },
 });
+
+// Sunucu başlarken SMTP bağlantısını kontrol et
+console.log("📧 [SERVER] SMTP yapılandırması kontrol ediliyor...");
+transporter
+  .verify()
+  .then(() => {
+    console.log("✅ [SERVER] SMTP bağlantısı başarılı - Sunucu hazır");
+  })
+  .catch((err) => {
+    console.error("❌ [SERVER] SMTP bağlantı hatası:", err);
+    console.error(
+      "⚠️ [SERVER] Sunucu başladı ama SMTP yapılandırması hatalı olabilir"
+    );
+  });
 
 const requestSchema = z.object({ email: z.string().email() });
 router.post("/request-code", async (req, res) => {
