@@ -56,47 +56,29 @@ router.post("/google", async (req, res) => {
   }
 });
 
-// --- SMTP AYARLARI (587 - STARTTLS - EN KARARLI YÖNTEM) ---
-const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-// Kanka burayı 587'ye sabitledim, Render'da en iyi bu çalışır.
-const smtpPort = 587;
+// --- SMTP AYARLARI (SİHİRLİ GMAIL MODU) ---
 const smtpUser = process.env.SMTP_USER || "";
-// Şifredeki boşlukları temizliyoruz (Garanti olsun)
 const smtpPass = (process.env.SMTP_PASS || "").replace(/\s/g, "");
 
-console.log("📧 [SERVER] Mail Ayarları Başlatılıyor...");
-console.log(`   Host: ${smtpHost}`);
-console.log(`   Port: ${smtpPort}`);
+console.log("📧 [SERVER] Mail Ayarları (Servis Modu):");
+console.log(`   Service: Gmail`);
 console.log(`   User: ${smtpUser ? "✅ Var" : "❌ Yok"}`);
-// Şifreyi güvenlik için gizliyoruz ama uzunluğunu kontrol ediyoruz
-console.log(
-  `   Pass: ${
-    smtpPass ? "✅ Var (" + smtpPass.length + " karakter)" : "❌ Yok"
-  }`
-);
 
+// KANKA DİKKAT: Host/Port yerine direkt 'service: gmail' kullanıyoruz.
 const transporter = nodemailer.createTransport({
-  host: smtpHost,
-  port: smtpPort,
-  secure: false, // 587 için false olmalı (STARTTLS kullanır)
+  service: "gmail", // <--- BU SATIR HAYAT KURTARIR
   auth: {
     user: smtpUser,
     pass: smtpPass,
   },
-  tls: {
-    ciphers: "SSLv3", // Uyumluluk için
-    rejectUnauthorized: false, // Sertifika hatalarını yoksay
-  },
-  // Timeout Ayarları (Sonsuza kadar beklemesin diye)
-  connectionTimeout: 10000, // 10 saniye
-  greetingTimeout: 10000, // 10 saniye
-  socketTimeout: 15000, // 15 saniye
 });
 
 // Sunucu başlarken bağlantıyı test et
 transporter
   .verify()
-  .then(() => console.log("✅ [SERVER] SMTP Bağlantısı BAŞARILI! (Port 587)"))
+  .then(() =>
+    console.log("✅ [SERVER] SMTP Bağlantısı BAŞARILI! (Gmail Service)")
+  )
   .catch((err) => {
     console.error("🔥 [SERVER] SMTP Bağlantı Hatası:", err);
   });
@@ -117,7 +99,6 @@ router.post("/request-code", async (req, res) => {
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const expires = new Date(Date.now() + 10 * 60 * 1000);
 
-    // Kullanıcıyı bul veya oluştur
     let user = await User.findOne({ email });
     if (!user) {
       user = await User.create({ email, googleId: `email_${Date.now()}` });
@@ -129,7 +110,6 @@ router.post("/request-code", async (req, res) => {
 
     console.log(`📤 [SERVER] ${email} adresine mail gönderiliyor...`);
 
-    // Mail Gönderme
     const info = await transporter.sendMail({
       from: `"Pratik Şef" <${smtpUser}>`,
       to: email,
@@ -142,7 +122,6 @@ router.post("/request-code", async (req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     console.error("❌ [SERVER] Mail Gönderme Hatası:", e);
-    // Hatayı detaylı olarak logluyoruz
     res.status(500).json({ error: e?.message || "Mail gönderilemedi" });
   }
 });
@@ -163,7 +142,7 @@ router.post("/verify-code", async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user || !user.loginCode || !user.loginCodeExpires) {
-      return res.status(401).json({ error: "Kod geçersiz veya süresi dolmuş" });
+      return res.status(401).json({ error: "Kod geçersiz" });
     }
 
     if (
@@ -173,7 +152,6 @@ router.post("/verify-code", async (req, res) => {
       return res.status(401).json({ error: "Hatalı kod" });
     }
 
-    // Temizlik
     user.loginCode = undefined as any;
     user.loginCodeExpires = undefined as any;
     await user.save();
