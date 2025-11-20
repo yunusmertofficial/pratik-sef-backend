@@ -56,48 +56,49 @@ router.post("/google", async (req, res) => {
   }
 });
 
-// --- SMTP AYARLARI (RENDER İLE UYUMLU) ---
-// Ortam değişkenlerini zorluyoruz, yoksa varsayılanları kullanıyoruz
+// --- SMTP AYARLARI (587 - STARTTLS - EN KARARLI YÖNTEM) ---
 const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-const smtpPort = parseInt(process.env.SMTP_PORT || "465"); // String'i sayıya çeviriyoruz
+// Kanka burayı 587'ye sabitledim, Render'da en iyi bu çalışır.
+const smtpPort = 587;
 const smtpUser = process.env.SMTP_USER || "";
-const smtpPass = (process.env.SMTP_PASS || "").replace(/\s/g, ""); // Boşlukları temizle
-const isSecure = process.env.SECURE === "true" || smtpPort === 465; // 465 ise secure true olmalı
+// Şifredeki boşlukları temizliyoruz (Garanti olsun)
+const smtpPass = (process.env.SMTP_PASS || "").replace(/\s/g, "");
 
 console.log("📧 [SERVER] Mail Ayarları Başlatılıyor...");
 console.log(`   Host: ${smtpHost}`);
 console.log(`   Port: ${smtpPort}`);
-console.log(`   Secure: ${isSecure}`);
 console.log(`   User: ${smtpUser ? "✅ Var" : "❌ Yok"}`);
+// Şifreyi güvenlik için gizliyoruz ama uzunluğunu kontrol ediyoruz
 console.log(
   `   Pass: ${
-    smtpPass ? "✅ Var (Uzunluk: " + smtpPass.length + ")" : "❌ Yok"
+    smtpPass ? "✅ Var (" + smtpPass.length + " karakter)" : "❌ Yok"
   }`
 );
 
 const transporter = nodemailer.createTransport({
   host: smtpHost,
   port: smtpPort,
-  secure: isSecure, // SSL (465 için true, 587 için false)
+  secure: false, // 587 için false olmalı (STARTTLS kullanır)
   auth: {
     user: smtpUser,
     pass: smtpPass,
   },
   tls: {
-    // Render'da bazen sertifika zinciri hatası olur, bunu yok sayıyoruz
-    rejectUnauthorized: false,
+    ciphers: "SSLv3", // Uyumluluk için
+    rejectUnauthorized: false, // Sertifika hatalarını yoksay
   },
+  // Timeout Ayarları (Sonsuza kadar beklemesin diye)
+  connectionTimeout: 10000, // 10 saniye
+  greetingTimeout: 10000, // 10 saniye
+  socketTimeout: 15000, // 15 saniye
 });
 
 // Sunucu başlarken bağlantıyı test et
 transporter
   .verify()
-  .then(() =>
-    console.log("✅ [SERVER] SMTP Bağlantısı BAŞARILI! Mail atabilirim.")
-  )
+  .then(() => console.log("✅ [SERVER] SMTP Bağlantısı BAŞARILI! (Port 587)"))
   .catch((err) => {
     console.error("🔥 [SERVER] SMTP Bağlantı Hatası:", err);
-    // Hata olsa bile sunucuyu çökertmiyoruz, sadece logluyoruz
   });
 
 const requestSchema = z.object({ email: z.string().email() });
@@ -141,7 +142,7 @@ router.post("/request-code", async (req, res) => {
     res.json({ ok: true });
   } catch (e: any) {
     console.error("❌ [SERVER] Mail Gönderme Hatası:", e);
-    // Hatayı detaylı olarak logluyoruz ki Render'da görelim
+    // Hatayı detaylı olarak logluyoruz
     res.status(500).json({ error: e?.message || "Mail gönderilemedi" });
   }
 });
@@ -162,14 +163,14 @@ router.post("/verify-code", async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user || !user.loginCode || !user.loginCodeExpires) {
-      return res.status(401).json({ error: "Kod geçersiz" });
+      return res.status(401).json({ error: "Kod geçersiz veya süresi dolmuş" });
     }
 
     if (
       user.loginCode !== code ||
       user.loginCodeExpires.getTime() < Date.now()
     ) {
-      return res.status(401).json({ error: "Hatalı veya süresi dolmuş kod" });
+      return res.status(401).json({ error: "Hatalı kod" });
     }
 
     // Temizlik
