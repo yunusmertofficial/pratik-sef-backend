@@ -2,7 +2,7 @@ import { Router } from "express";
 import { OAuth2Client } from "google-auth-library";
 import { signSession } from "../middleware/auth";
 import { User } from "../models";
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { z } from "zod";
 
 const router = Router();
@@ -56,32 +56,16 @@ router.post("/google", async (req, res) => {
   }
 });
 
-// --- SMTP AYARLARI (SİHİRLİ GMAIL MODU) ---
-const smtpUser = process.env.SMTP_USER || "";
-const smtpPass = (process.env.SMTP_PASS || "").replace(/\s/g, "");
+// --- RESEND AYARLARI ---
+const resendApiKey = process.env.RESEND_API_KEY || "";
+const resendFromEmail =
+  process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 
-console.log("📧 [SERVER] Mail Ayarları (Servis Modu):");
-console.log(`   Service: Gmail`);
-console.log(`   User: ${smtpUser ? "✅ Var" : "❌ Yok"}`);
+console.log("📧 [SERVER] Resend Mail Ayarları:");
+console.log(`   API Key: ${resendApiKey ? "✅ Var" : "❌ Yok"}`);
+console.log(`   From Email: ${resendFromEmail}`);
 
-// KANKA DİKKAT: Host/Port yerine direkt 'service: gmail' kullanıyoruz.
-const transporter = nodemailer.createTransport({
-  service: "gmail", // <--- BU SATIR HAYAT KURTARIR
-  auth: {
-    user: smtpUser,
-    pass: smtpPass,
-  },
-});
-
-// Sunucu başlarken bağlantıyı test et
-transporter
-  .verify()
-  .then(() =>
-    console.log("✅ [SERVER] SMTP Bağlantısı BAŞARILI! (Gmail Service)")
-  )
-  .catch((err) => {
-    console.error("🔥 [SERVER] SMTP Bağlantı Hatası:", err);
-  });
+const resend = new Resend(resendApiKey);
 
 const requestSchema = z.object({ email: z.string().email() });
 
@@ -110,15 +94,18 @@ router.post("/request-code", async (req, res) => {
 
     console.log(`📤 [SERVER] ${email} adresine mail gönderiliyor...`);
 
-    const info = await transporter.sendMail({
-      from: `"Pratik Şef" <${smtpUser}>`,
+    const data = await resend.emails.send({
+      from: resendFromEmail || "onboarding@resend.dev",
       to: email,
       subject: "Giriş Kodunuz - Pratik Şef",
-      text: `Kodunuz: ${code}`,
-      html: `<b>Kodunuz: ${code}</b>`,
+      html: `<p>Merhaba,</p><p>Giriş kodunuz: <strong>${code}</strong></p><p>Bu kod 10 dakika geçerlidir.</p>`,
     });
 
-    console.log("✅ [SERVER] Mail gönderildi! ID:", info.messageId);
+    if (data.error) {
+      throw new Error(data.error.message);
+    }
+
+    console.log("✅ [SERVER] Mail gönderildi! ID:", data.data?.id || "N/A");
     res.json({ ok: true });
   } catch (e: any) {
     console.error("❌ [SERVER] Mail Gönderme Hatası:", e);
