@@ -7,6 +7,8 @@ const UserSchema = new Schema({
   avatar: { type: String },
   loginCode: { type: String },
   loginCodeExpires: { type: Date },
+  deleteCode: { type: String },
+  deleteCodeExpires: { type: Date },
   dailyGenCount: { type: Number, default: 0 },
   dailyGenDate: { type: Date },
   createdAt: { type: Date, default: Date.now }
