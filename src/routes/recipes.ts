@@ -34,12 +34,10 @@ router.post("/generate-recipe", requireAuth, async (req, res) => {
     }
     if ((user.dailyGenCount || 0) >= DAILY_GEN_LIMIT) {
       const remaining = 0;
-      return res
-        .status(429)
-        .json({
-          error: `Günlük öneri limitine ulaşıldı (${DAILY_GEN_LIMIT})`,
-          remaining,
-        });
+      return res.status(429).json({
+        error: `Günlük öneri limitine ulaşıldı (${DAILY_GEN_LIMIT})`,
+        remaining,
+      });
     }
     user.dailyGenCount = (user.dailyGenCount || 0) + 1;
     await user.save();
