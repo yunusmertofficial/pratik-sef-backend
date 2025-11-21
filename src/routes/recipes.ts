@@ -11,6 +11,24 @@ const DAILY_GEN_LIMIT = process.env.DAILY_GEN_LIMIT
   ? parseInt(process.env.DAILY_GEN_LIMIT)
   : 3;
 
+// Geçici cache: Yeni oluşturulan tarifleri tutmak için (payload sorunlarını önlemek için)
+interface CachedRecipe {
+  data: any;
+  userId: string;
+  expiresAt: number;
+}
+const recipeCache = new Map<string, CachedRecipe>();
+
+// Cache temizleme: 1 saat sonra otomatik sil
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, cached] of recipeCache.entries()) {
+    if (cached.expiresAt < now) {
+      recipeCache.delete(id);
+    }
+  }
+}, 60000); // Her 1 dakikada bir kontrol et
+
 const generateSchema = z.object({
   ingredients: z.string().min(1),
   mealTypeId: z.string().min(1),
@@ -85,11 +103,58 @@ router.post("/generate-recipe", requireAuth, async (req, res) => {
       parsed.data.mealTypeId,
       parsed.data.isAlternative || false
     );
-    const imageUrl = await generateRecipeImage(
-      recipe.title,
-      recipe.description
-    );
-    res.json({ ...recipe, imageUrl });
+
+    // Resim oluşturmayı dene, hata verirse bile tarifi döndür
+    let imageUrl: string | undefined;
+    try {
+      imageUrl = await generateRecipeImage(recipe.title, recipe.description);
+      console.log(
+        "✅ [SERVER] Resim URL oluşturuldu:",
+        imageUrl?.substring(0, 100)
+      );
+    } catch (imgError: any) {
+      console.error(
+        "❌ [SERVER] Resim oluşturma hatası:",
+        imgError?.message || imgError
+      );
+      // Hata durumunda basit bir fallback URL oluştur
+      const fallbackTitle = recipe.title
+        .replace(/[^\w\s-]/g, "")
+        .trim()
+        .substring(0, 20);
+      const fallbackPrompt = encodeURIComponent(
+        `delicious ${fallbackTitle} food`
+      );
+      const seed = Math.floor(Math.random() * 100000);
+      imageUrl = `https://image.pollinations.ai/prompt/${fallbackPrompt}?width=1200&height=900&seed=${seed}&enhance=true`;
+      console.log(
+        "🔄 [SERVER] Fallback URL oluşturuldu:",
+        imageUrl.substring(0, 100)
+      );
+    }
+
+    // imageUrl her zaman olmalı
+    if (!imageUrl) {
+      console.warn(
+        "⚠️ [SERVER] imageUrl hala undefined, basit URL oluşturuluyor"
+      );
+      const simplePrompt = encodeURIComponent("delicious food photography");
+      const seed = Math.floor(Math.random() * 100000);
+      imageUrl = `https://image.pollinations.ai/prompt/${simplePrompt}?width=1200&height=900&seed=${seed}&enhance=true`;
+    }
+
+    console.log("📤 [SERVER] Tarif gönderiliyor, imageUrl var mı:", !!imageUrl);
+    const recipeData = { ...recipe, imageUrl };
+
+    // Cache'e kaydet (1 saat geçerli)
+    const authUser = (req as any).user;
+    recipeCache.set(recipe.id, {
+      data: recipeData,
+      userId: authUser.id,
+      expiresAt: Date.now() + 60 * 60 * 1000, // 1 saat
+    });
+
+    res.json(recipeData);
   } catch (e: any) {
     const msg =
       typeof e?.message === "string" && e.message.length > 0
@@ -204,8 +269,27 @@ router.get("/recipe/:id", requireAuth, async (req, res) => {
   const user = (req as any).user;
   const id = req.params.id;
   try {
+    // Önce cache'de kontrol et (yeni oluşturulan tarifler için)
+    const cached = recipeCache.get(id);
+    if (cached && cached.userId === user.id && cached.expiresAt > Date.now()) {
+      console.log("✅ [SERVER] Tarif cache'den döndürüldü:", id);
+      return res.json(cached.data);
+    }
+
+    // Cache'de yoksa veritabanından çek
     const item = await Recipe.findOne({ _id: id, userId: user.id });
-    if (!item) return res.status(404).json({ error: "Not found" });
+    if (!item) {
+      // Veritabanında da yoksa, externalId ile dene
+      const byExternalId = await Recipe.findOne({
+        externalId: id,
+        userId: user.id,
+      });
+      if (byExternalId) {
+        const obj = byExternalId.toObject();
+        return res.json(obj);
+      }
+      return res.status(404).json({ error: "Not found" });
+    }
     const obj = item.toObject();
     res.json(obj);
   } catch {
